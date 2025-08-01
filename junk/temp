@@ -1,0 +1,775 @@
+"""
+Qloo Tools Utility - Complete AI System for Qloo API
+====================================================
+
+This module provides easy-to-use functions for all Qloo API capabilities:
+1. Search for entities and get their IDs
+2. Search for tags and get their IDs 
+3. Get entity insights (brands, movies, artists, etc.)
+4. Get tag insights
+5. Get demographic insights
+6. Get heatmap insights and data
+7. Audience discovery and analysis
+
+Usage:
+    from tools_utility import QlooTools
+    
+    tools = QlooTools(api_key="your_api_key")
+    
+    # Quick entity search
+    entity_id = tools.find_entity_id("Nike")
+    
+    # Get insights
+    insights = tools.get_brand_insights_for_demographics(age="25_to_35", gender="male")
+"""
+
+import json
+import logging
+from typing import Dict, List, Optional, Any, Union, Tuple
+from dataclasses import dataclass
+
+# Import your existing Qloo modules
+from src.qloo import QlooAPIClient, QlooSignals, QlooEntity, QlooAudience
+
+logger = logging.getLogger(__name__)
+
+class QlooTools:
+    """
+    Complete Qloo AI Tools - Easy interface for all Qloo API functionality
+    """
+    
+    def __init__(self, api_key: str):
+        """Initialize QlooTools with API key"""
+        self.client = QlooAPIClient(api_key=api_key)
+        
+    # ============================================================================
+    # 1. ENTITY SEARCH & DISCOVERY
+    # ============================================================================
+    
+    def find_entity_id(self, entity_name: str, entity_type: Optional[str] = None) -> Optional[str]:
+        """
+        Find entity ID by name (returns best match)
+        
+        Args:
+            entity_name: Name to search for (e.g., "Nike", "Taylor Swift")
+            entity_type: Optional type filter ("brand", "artist", etc.)
+            
+        Returns:
+            Entity ID string or None if not found
+        """
+        try:
+            result = self.client.search_entities(
+                query=entity_name,
+                entity_types=[entity_type] if entity_type else None,
+                limit=1,
+                sort_by="match"
+            )
+            
+            if result.get("success") and result.get("entities"):
+                return result["entities"][0].id
+                
+        except Exception as e:
+            logger.error(f"Entity search failed: {e}")
+            
+        return None
+    
+    def find_multiple_entity_ids(self, entity_names: List[str], entity_type: Optional[str] = None) -> Dict[str, Optional[str]]:
+        """
+        Find entity IDs for multiple names
+        
+        Args:
+            entity_names: List of names to search for
+            entity_type: Optional type filter
+            
+        Returns:
+            Dictionary mapping names to entity IDs
+        """
+        results = {}
+        
+        for name in entity_names:
+            entity_id = self.find_entity_id(name, entity_type)
+            results[name] = entity_id
+            
+        return results
+    
+    def search_entities_detailed(
+        self,
+        query: str,
+        entity_types: Optional[List[str]] = None,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Search entities with detailed results
+        
+        Args:
+            query: Search query
+            entity_types: Types to search in
+            limit: Max results
+            
+        Returns:
+            List of detailed entity dictionaries
+        """
+        try:
+            result = self.client.search_entities(
+                query=query,
+                entity_types=entity_types,
+                limit=limit
+            )
+            
+            if result.get("success"):
+                return [
+                    {
+                        "id": entity.id,
+                        "name": entity.name,
+                        "type": entity.entity_type,
+                        "affinity_score": entity.affinity_score,
+                        "popularity": entity.popularity
+                    }
+                    for entity in result.get("entities", [])
+                ]
+                
+        except Exception as e:
+            logger.error(f"Entity search failed: {e}")
+            
+        return []
+    
+    # ============================================================================
+    # 2. TAG SEARCH & DISCOVERY  
+    # ============================================================================
+    
+    def find_tag_ids(self, tag_name: str, tag_type: Optional[str] = None, limit: int = 5) -> List[str]:
+        """
+        Find tag IDs by name
+        
+        Args:
+            tag_name: Tag name to search for
+            tag_type: Optional tag type filter
+            limit: Max results
+            
+        Returns:
+            List of tag ID strings
+        """
+        try:
+            # Using the new search_tags method we need to add to qloo.py
+            result = self.client.search_tags(
+                query=tag_name,
+                tag_types=[tag_type] if tag_type else None,
+                limit=limit
+            )
+            
+            if result.get("success"):
+                return [tag.get("tag_id") for tag in result.get("tags", []) if tag.get("tag_id")]
+                
+        except Exception as e:
+            logger.error(f"Tag search failed: {e}")
+            
+        return []
+    
+    def get_top_tags_for_entity_type(self, entity_type: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get top tags for a specific entity type
+        
+        Args:
+            entity_type: Entity type (e.g., "movie", "brand")
+            limit: Max results
+            
+        Returns:
+            List of tag dictionaries
+        """
+        try:
+            result = self.client.search_tags(
+                parent_types=[f"urn:entity:{entity_type}"],
+                limit=limit
+            )
+            
+            if result.get("success"):
+                return [
+                    {
+                        "tag_id": tag.get("tag_id"),
+                        "name": tag.get("name"),
+                        "subtype": tag.get("subtype")
+                    }
+                    for tag in result.get("tags", [])
+                ]
+                
+        except Exception as e:
+            logger.error(f"Tag search failed: {e}")
+            
+        return []
+    
+    # ============================================================================
+    # 3. SIGNAL CREATION & MANAGEMENT
+    # ============================================================================
+    
+    def create_signals(
+        self,
+        age: Optional[str] = None,
+        gender: Optional[str] = None,
+        location: Optional[str] = None,
+        entity_names: Optional[List[str]] = None,
+        entity_ids: Optional[List[str]] = None,
+        tag_names: Optional[List[str]] = None,
+        tag_ids: Optional[List[str]] = None,
+        audience_ids: Optional[List[str]] = None
+    ) -> QlooSignals:
+        """
+        Create QlooSignals object with various parameters
+        
+        Args:
+            age: Age range ("35_and_younger", "36_to_55", "55_and_older")
+            gender: Gender ("male", "female")
+            location: Location query string
+            entity_names: List of entity names to resolve to IDs
+            entity_ids: List of entity IDs (direct)
+            tag_names: List of tag names to resolve to IDs  
+            tag_ids: List of tag IDs (direct)
+            audience_ids: List of audience IDs
+            
+        Returns:
+            QlooSignals object
+        """
+        
+        # Build demographics
+        demographics = {}
+        if age:
+            demographics["age"] = age
+        if gender:
+            demographics["gender"] = gender
+            
+        # Build location
+        location_dict = {}
+        if location:
+            location_dict["query"] = location
+            
+        # Resolve entity names to IDs if provided
+        final_entity_ids = list(entity_ids or [])
+        if entity_names:
+            for name in entity_names:
+                entity_id = self.find_entity_id(name)
+                if entity_id:
+                    final_entity_ids.append(entity_id)
+                    
+        # Resolve tag names to IDs if provided
+        final_tag_ids = list(tag_ids or [])
+        if tag_names:
+            for name in tag_names:
+                found_tag_ids = self.find_tag_ids(name, limit=1)
+                if found_tag_ids:
+                    final_tag_ids.append(found_tag_ids[0])
+        
+        # Create entity queries for names that couldn't be resolved
+        entity_queries = None
+        if entity_names:
+            entity_queries = [{"name": name, "resolve_to": "both"} for name in entity_names]
+        
+        return QlooSignals(
+            demographics=demographics if demographics else None,
+            location=location_dict if location_dict else None,
+            entity_ids=final_entity_ids if final_entity_ids else None,
+            entity_queries=entity_queries,
+            tag_ids=final_tag_ids if final_tag_ids else None,
+            audience_ids=audience_ids
+        )
+    
+    # ============================================================================
+    # 4. AUDIENCE DISCOVERY
+    # ============================================================================
+    
+    def find_audiences_for_demographics(
+        self,
+        age: Optional[str] = None,
+        gender: Optional[str] = None,
+        location: Optional[str] = None,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Find audiences based on demographics
+        
+        Args:
+            age: Age range
+            gender: Gender
+            location: Location
+            limit: Max results
+            
+        Returns:
+            List of audience dictionaries
+        """
+        signals = self.create_signals(age=age, gender=gender, location=location)
+        
+        try:
+            result = self.client.find_audiences(signals=signals, limit=limit)
+            
+            if result.get("audiences"):
+                return [
+                    {
+                        "id": aud.id,
+                        "name": aud.name,
+                        "parent_type": aud.parent_type
+                    }
+                    for aud in result["audiences"]
+                ]
+                
+        except Exception as e:
+            logger.error(f"Audience search failed: {e}")
+            
+        return []
+    
+    def find_audiences_for_interests(
+        self,
+        entity_names: Optional[List[str]] = None,
+        entity_ids: Optional[List[str]] = None,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Find audiences based on entity interests
+        
+        Args:
+            entity_names: List of entity names
+            entity_ids: List of entity IDs
+            limit: Max results
+            
+        Returns:
+            List of audience dictionaries
+        """
+        signals = self.create_signals(entity_names=entity_names, entity_ids=entity_ids)
+        
+        try:
+            result = self.client.find_audiences(signals=signals, limit=limit)
+            
+            if result.get("audiences"):
+                return [
+                    {
+                        "id": aud.id,
+                        "name": aud.name,
+                        "parent_type": aud.parent_type
+                    }
+                    for aud in result["audiences"]
+                ]
+                
+        except Exception as e:
+            logger.error(f"Audience search failed: {e}")
+            
+        return []
+    
+    # ============================================================================
+    # 5. ENTITY INSIGHTS
+    # ============================================================================
+    
+    def get_brand_insights_for_demographics(
+        self,
+        age: Optional[str] = None,
+        gender: Optional[str] = None,
+        location: Optional[str] = None,
+        limit: int = 15
+    ) -> Dict[str, Any]:
+        """
+        Get brand insights for demographic signals
+        
+        Args:
+            age: Age range
+            gender: Gender 
+            location: Location
+            limit: Max results
+            
+        Returns:
+            Brand insights dictionary
+        """
+        # First find audiences for these demographics
+        audiences = self.find_audiences_for_demographics(age, gender, location, limit=10)
+        audience_ids = [aud["id"] for aud in audiences]
+        
+        if not audience_ids:
+            return {"success": False, "error": "No audiences found for demographics"}
+        
+        signals = self.create_signals(age=age, gender=gender, location=location)
+        
+        return self.client.get_entity_insights(
+            audience_ids=audience_ids,
+            entity_type="brand",
+            signals=signals,
+            limit=limit
+        )
+    
+    def get_insights_for_entity_interests(
+        self,
+        entity_names: List[str],
+        insight_type: str = "brand",
+        limit: int = 15
+    ) -> Dict[str, Any]:
+        """
+        Get insights based on entity interests
+        
+        Args:
+            entity_names: List of entity names for context
+            insight_type: Type of insights ("brand", "movie", "artist", etc.)
+            limit: Max results
+            
+        Returns:
+            Insights dictionary
+        """
+        # Find audiences based on entity interests
+        audiences = self.find_audiences_for_interests(entity_names=entity_names, limit=10)
+        audience_ids = [aud["id"] for aud in audiences]
+        
+        if not audience_ids:
+            return {"success": False, "error": "No audiences found for entity interests"}
+        
+        signals = self.create_signals(entity_names=entity_names)
+        
+        return self.client.get_entity_insights(
+            audience_ids=audience_ids,
+            entity_type=insight_type,
+            signals=signals,
+            limit=limit
+        )
+    
+    def get_multi_entity_insights_for_demographics(
+        self,
+        age: Optional[str] = None,
+        gender: Optional[str] = None,
+        location: Optional[str] = None,
+        entity_types: List[str] = ["brand", "movie", "artist"],
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Get insights for multiple entity types based on demographics
+        
+        Args:
+            age: Age range
+            gender: Gender
+            location: Location
+            entity_types: List of entity types to get insights for
+            limit: Max results per type
+            
+        Returns:
+            Multi-entity insights dictionary
+        """
+        # Find audiences
+        audiences = self.find_audiences_for_demographics(age, gender, location, limit=10)
+        audience_ids = [aud["id"] for aud in audiences]
+        
+        if not audience_ids:
+            return {"success": False, "error": "No audiences found for demographics"}
+        
+        signals = self.create_signals(age=age, gender=gender, location=location)
+        
+        return self.client.get_multi_entity_insights(
+            audience_ids=audience_ids,
+            entity_types=entity_types,
+            signals=signals,
+            limit=limit
+        )
+    
+    # ============================================================================
+    # 6. TAG INSIGHTS
+    # ============================================================================
+    
+    def get_tag_insights_for_demographics(
+        self,
+        age: Optional[str] = None,
+        gender: Optional[str] = None,
+        location: Optional[str] = None,
+        tag_filter: Optional[str] = None,
+        limit: int = 20
+    ) -> Dict[str, Any]:
+        """
+        Get tag insights for demographic signals
+        
+        Args:
+            age: Age range
+            gender: Gender
+            location: Location  
+            tag_filter: Optional tag filter
+            limit: Max results
+            
+        Returns:
+            Tag insights dictionary
+        """
+        # Find audiences
+        audiences = self.find_audiences_for_demographics(age, gender, location, limit=10)
+        audience_ids = [aud["id"] for aud in audiences]
+        
+        if not audience_ids:
+            return {"success": False, "error": "No audiences found for demographics"}
+        
+        signals = self.create_signals(age=age, gender=gender, location=location)
+        
+        return self.client.get_tag_insights(
+            audience_ids=audience_ids,
+            signals=signals,
+            tag_filter=tag_filter,
+            limit=limit
+        )
+    
+    # ============================================================================
+    # 7. DEMOGRAPHIC INSIGHTS
+    # ============================================================================
+    
+    def get_demographics_for_entity(self, entity_name: str, entity_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get demographic insights for a specific entity
+        
+        Args:
+            entity_name: Entity name
+            entity_type: Optional entity type
+            
+        Returns:
+            Demographics insights dictionary
+        """
+        entity_id = self.find_entity_id(entity_name, entity_type)
+        
+        if not entity_id:
+            return {"success": False, "error": f"Entity not found: {entity_name}"}
+        
+        return self.client.get_demographics_analysis(entity_ids=[entity_id])
+    
+    def get_demographics_for_entities(self, entity_names: List[str]) -> Dict[str, Any]:
+        """
+        Get demographic insights for multiple entities
+        
+        Args:
+            entity_names: List of entity names
+            
+        Returns:
+            Demographics insights dictionary
+        """
+        entity_ids = []
+        
+        for name in entity_names:
+            entity_id = self.find_entity_id(name)
+            if entity_id:
+                entity_ids.append(entity_id)
+                
+        if not entity_ids:
+            return {"success": False, "error": "No entities found"}
+        
+        return self.client.get_demographics_analysis(entity_ids=entity_ids)
+    
+    # ============================================================================
+    # 8. HEATMAP INSIGHTS & DATA
+    # ============================================================================
+    
+    def get_heatmap_for_location(
+        self,
+        location: str,
+        entity_names: Optional[List[str]] = None,
+        limit: int = 50
+    ) -> Dict[str, Any]:
+        """
+        Get heatmap analysis for a location
+        
+        Args:
+            location: Location query
+            entity_names: Optional entity context
+            limit: Max data points
+            
+        Returns:
+            Heatmap analysis dictionary
+        """
+        entity_ids = []
+        if entity_names:
+            for name in entity_names:
+                entity_id = self.find_entity_id(name)
+                if entity_id:
+                    entity_ids.append(entity_id)
+        
+        return self.client.get_heatmap_analysis(
+            location_query=location,
+            entity_ids=entity_ids if entity_ids else None,
+            limit=limit
+        )
+    
+    def get_heatmap_data_simple(self, location: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get heatmap data points as simple list
+        
+        Args:
+            location: Location query
+            limit: Max data points
+            
+        Returns:
+            List of heatmap data points
+        """
+        try:
+            result = self.client.get_heatmap_analysis(location_query=location, limit=limit)
+            
+            if result.get("success"):
+                heatmap_data = result.get("results", {}).get("heatmap", [])
+                
+                return [
+                    {
+                        "latitude": point.get("location", {}).get("latitude"),
+                        "longitude": point.get("location", {}).get("longitude"),
+                        "affinity": point.get("query", {}).get("affinity", 0),
+                        "popularity": point.get("query", {}).get("popularity", 0),
+                        "geohash": point.get("location", {}).get("geohash")
+                    }
+                    for point in heatmap_data
+                ]
+                
+        except Exception as e:
+            logger.error(f"Heatmap data extraction failed: {e}")
+            
+        return []
+    
+    # ============================================================================
+    # 9. CONVENIENCE METHODS
+    # ============================================================================
+    
+    def quick_brand_analysis(self, demographic_profile: Dict[str, str]) -> Dict[str, Any]:
+        """
+        Quick brand analysis for a demographic profile
+        
+        Args:
+            demographic_profile: Dict with 'age', 'gender', 'location' keys
+            
+        Returns:
+            Complete brand analysis
+        """
+        age = demographic_profile.get("age")
+        gender = demographic_profile.get("gender") 
+        location = demographic_profile.get("location")
+        
+        # Get brand insights
+        brand_insights = self.get_brand_insights_for_demographics(age, gender, location)
+        
+        # Get tag insights for context
+        tag_insights = self.get_tag_insights_for_demographics(age, gender, location, limit=10)
+        
+        return {
+            "demographic_profile": demographic_profile,
+            "brand_insights": brand_insights,
+            "tag_insights": tag_insights,
+            "success": brand_insights.get("success", False) and tag_insights.get("success", False)
+        }
+    
+    def entity_deep_dive(self, entity_name: str) -> Dict[str, Any]:
+        """
+        Complete analysis of an entity
+        
+        Args:
+            entity_name: Entity name to analyze
+            
+        Returns:
+            Complete entity analysis
+        """
+        # Find entity details
+        entity_details = self.search_entities_detailed(entity_name, limit=1)
+        
+        if not entity_details:
+            return {"success": False, "error": f"Entity not found: {entity_name}"}
+        
+        entity = entity_details[0]
+        
+        # Get demographics
+        demographics = self.get_demographics_for_entity(entity_name)
+        
+        # Find related audiences
+        audiences = self.find_audiences_for_interests(entity_names=[entity_name])
+        
+        return {
+            "entity_name": entity_name,
+            "entity_details": entity,
+            "demographics": demographics,
+            "related_audiences": audiences,
+            "success": True
+        }
+    
+    def test_connection(self) -> bool:
+        """
+        Test API connection
+        
+        Returns:
+            True if connection successful
+        """
+        try:
+            result = self.client.test_connection()
+            return result.get("success", False)
+        except Exception as e:
+            logger.error(f"Connection test failed: {e}")
+            return False
+
+# ============================================================================
+# STANDALONE UTILITY FUNCTIONS 
+# ============================================================================
+
+def create_qloo_tools(api_key: str) -> QlooTools:
+    """
+    Factory function to create QlooTools instance
+    
+    Args:
+        api_key: Qloo API key
+        
+    Returns:
+        QlooTools instance
+    """
+    return QlooTools(api_key)
+
+def quick_entity_search(api_key: str, entity_name: str, entity_type: Optional[str] = None) -> Optional[str]:
+    """
+    Quick function to find entity ID
+    
+    Args:
+        api_key: Qloo API key
+        entity_name: Entity name
+        entity_type: Optional entity type
+        
+    Returns:
+        Entity ID or None
+    """
+    tools = QlooTools(api_key)
+    return tools.find_entity_id(entity_name, entity_type)
+
+def quick_demographic_brands(api_key: str, age: str, gender: str, location: Optional[str] = None) -> List[str]:
+    """
+    Quick function to get top brands for demographics
+    
+    Args:
+        api_key: Qloo API key
+        age: Age range
+        gender: Gender
+        location: Optional location
+        
+    Returns:
+        List of brand names
+    """
+    tools = QlooTools(api_key)
+    result = tools.get_brand_insights_for_demographics(age, gender, location, limit=10)
+    
+    if result.get("success"):
+        entities = result.get("results", {}).get("entities", [])
+        return [entity.get("name", "") for entity in entities]
+    
+    return []
+
+# Example usage
+if __name__ == "__main__":
+    # Initialize tools
+    tools = QlooTools(api_key="your_api_key_here")
+    
+    # Test connection
+    if tools.test_connection():
+        print("✅ Connected to Qloo API successfully")
+        
+        # Example 1: Find entity ID
+        nike_id = tools.find_entity_id("Nike", "brand")
+        print(f"Nike entity ID: {nike_id}")
+        
+        # Example 2: Get brand insights for demographics
+        insights = tools.get_brand_insights_for_demographics(
+            age="25_to_35",
+            gender="male",
+            location="New York"
+        )
+        print(f"Brand insights success: {insights.get('success')}")
+        
+        # Example 3: Complete demographic analysis
+        analysis = tools.quick_brand_analysis({
+            "age": "35_and_younger",
+            "gender": "female", 
+            "location": "California"
+        })
+        print(f"Quick analysis success: {analysis.get('success')}")
+        
+    else:
+        print("❌ Failed to connect to Qloo API")
